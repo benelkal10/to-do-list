@@ -2,105 +2,94 @@ const Task = require('../models/Task');
 const { getCachedTasks, setCachedTasks, clearCachedTasks } = require('../services/cacheService');
 const logger = require('../config/logger');
 const asyncHandler = require('../middlewares/asyncHandler');
+const ErrorResponse = require('../utils/errorResponse');
+const { TASK_STATUS } = require('../utils/constants');
 
-// @desc    Get all tasks for logged in user
-// @route   GET /api/tasks
-// @access  Private
-const getTasks = asyncHandler(async (req, res) => {
+const getTasks = asyncHandler(async (req, res, next) => {
   const userId = req.user._id;
 
-  const cachedTasks = await getCachedTasks(userId);
-  if (cachedTasks) {
-    logger.info(`Serving tasks from cache for user ${userId}`);
-    return res.json(cachedTasks);
+  const cached = await getCachedTasks(userId);
+  if (cached) {
+    return res.status(200).json({ success: true, count: cached.length, data: cached });
   }
 
   const tasks = await Task.find({
-    $or: [
-      { owner: userId },
-      { sharedWith: userId }
-    ]
+    $or: [{ owner: userId }, { sharedWith: userId }]
   }).populate('owner', 'username');
 
   await setCachedTasks(userId, tasks);
-  res.json(tasks);
+  
+  res.status(200).json({ success: true, count: tasks.length, data: tasks });
 });
 
-// @desc    Create a new task
-// @route   POST /api/tasks
-// @access  Private
-const createTask = asyncHandler(async (req, res) => {
+const createTask = asyncHandler(async (req, res, next) => {
   const { title, isRecurring, recurrenceFrequency } = req.body;
 
-  const task = new Task({
+  if (!title) {
+    return next(new ErrorResponse('Please provide a task title', 400));
+  }
+
+  const task = await Task.create({
     title,
     owner: req.user._id,
     isRecurring,
     recurrenceFrequency,
   });
 
-  const createdTask = await task.save();
   await clearCachedTasks(req.user._id);
-  res.status(201).json(createdTask);
+  res.status(201).json({ success: true, data: task });
 });
 
-// @desc    Update task status or details
-// @route   PUT /api/tasks/:id
-// @access  Private
-const updateTask = asyncHandler(async (req, res) => {
+const updateTask = asyncHandler(async (req, res, next) => {
+  let task = await Task.findById(req.params.id);
+
+  if (!task) {
+    return next(new ErrorResponse(`Task not found with id of ${req.params.id}`, 404));
+  }
+
+  const isOwner = task.owner.equals(req.user._id);
+  const isShared = task.sharedWith.some(id => id.equals(req.user._id));
+
+  if (!isOwner && !isShared) {
+    return next(new ErrorResponse('Not authorized to update this task', 401));
+  }
+
   const { title, status, sharedWith, isRecurring, recurrenceFrequency } = req.body;
-  const task = await Task.findById(req.params.id);
+  
+  task = await Task.findByIdAndUpdate(
+    req.params.id, 
+    { title, status, sharedWith, isRecurring, recurrenceFrequency }, 
+    { new: true, runValidators: true }
+  );
 
-  if (task) {
-    if (task.owner.toString() !== req.user._id.toString() && !task.sharedWith.includes(req.user._id)) {
-      return res.status(401).json({ message: 'Not authorized' });
-    }
-
-    task.title = title || task.title;
-    task.status = status || task.status;
-    task.isRecurring = isRecurring !== undefined ? isRecurring : task.isRecurring;
-    task.recurrenceFrequency = recurrenceFrequency || task.recurrenceFrequency;
-    
-    if (sharedWith) {
-      task.sharedWith = sharedWith;
-    }
-
-    const updatedTask = await task.save();
-    await clearCachedTasks(req.user._id);
-    
-    // Also clear cache for shared users
-    for (const sharedUserId of task.sharedWith) {
-      await clearCachedTasks(sharedUserId);
-    }
-
-    res.json(updatedTask);
-  } else {
-    res.status(404).json({ message: 'Task not found' });
+  await clearCachedTasks(req.user._id);
+  for (const sharedId of task.sharedWith) {
+    await clearCachedTasks(sharedId);
   }
+
+  res.status(200).json({ success: true, data: task });
 });
 
-// @desc    Delete a task
-// @route   DELETE /api/tasks/:id
-// @access  Private
-const deleteTask = asyncHandler(async (req, res) => {
+const deleteTask = asyncHandler(async (req, res, next) => {
   const task = await Task.findById(req.params.id);
 
-  if (task) {
-    if (task.owner.toString() !== req.user._id.toString()) {
-      return res.status(401).json({ message: 'Not authorized' });
-    }
-
-    await task.deleteOne();
-    await clearCachedTasks(req.user._id);
-    
-    for (const sharedUserId of task.sharedWith) {
-      await clearCachedTasks(sharedUserId);
-    }
-
-    res.json({ message: 'Task removed' });
-  } else {
-    res.status(404).json({ message: 'Task not found' });
+  if (!task) {
+    return next(new ErrorResponse(`Task not found with id of ${req.params.id}`, 404));
   }
+
+  if (!task.owner.equals(req.user._id)) {
+    return next(new ErrorResponse('Only the owner can delete this task', 401));
+  }
+
+  const sharedUsers = [...task.sharedWith];
+  await task.deleteOne();
+  
+  await clearCachedTasks(req.user._id);
+  for (const sharedId of sharedUsers) {
+    await clearCachedTasks(sharedId);
+  }
+
+  res.status(200).json({ success: true, data: {} });
 });
 
 module.exports = { getTasks, createTask, updateTask, deleteTask };

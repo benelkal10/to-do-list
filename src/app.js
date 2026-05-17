@@ -1,5 +1,6 @@
 const express = require('express');
 const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 const apiLimiter = require('./middlewares/rateLimiter');
 const { notFound, errorHandler } = require('./middlewares/errorMiddleware');
 const authRoutes = require('./routes/authRoutes');
@@ -13,14 +14,18 @@ if (process.env.NODE_ENV === 'development') {
 
 app.use(express.json());
 
-// Rate Limiting
-app.use('/api', apiLimiter);
+const authLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: 'Too many accounts created from this IP, please try again after an hour'
+});
 
-// Routes
+app.use('/api', apiLimiter);
+app.use('/api/auth', authLimiter);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/tasks', taskRoutes);
 
-// Error Handling
 app.use(notFound);
 app.use(errorHandler);
 

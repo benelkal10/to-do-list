@@ -1,4 +1,3 @@
-require('dotenv').config();
 const app = require('./app');
 const connectDB = require('./config/db');
 const { initCron } = require('./services/cronService');
@@ -6,10 +5,7 @@ const logger = require('./config/logger');
 
 const startServer = async () => {
   try {
-    // Connect to Database
     await connectDB();
-
-    // Initialize Cron Jobs
     initCron();
 
     const PORT = process.env.PORT || 3000;

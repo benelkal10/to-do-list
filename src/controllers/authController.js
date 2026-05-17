@@ -1,17 +1,23 @@
 const User = require('../models/User');
 const { generateToken } = require('../services/authService');
 const asyncHandler = require('../middlewares/asyncHandler');
+const ErrorResponse = require('../utils/errorResponse');
 
-// @desc    Register a new user
-// @route   POST /api/auth/register
-// @access  Public
-const registerUser = asyncHandler(async (req, res) => {
+const registerUser = asyncHandler(async (req, res, next) => {
   const { username, password } = req.body;
+
+  if (!username || !password) {
+    return next(new ErrorResponse('Please provide username and password', 400));
+  }
+
+  if (password.length < 6) {
+    return next(new ErrorResponse('Password must be at least 6 characters', 400));
+  }
 
   const userExists = await User.findOne({ username });
 
   if (userExists) {
-    return res.status(400).json({ message: 'User already exists' });
+    return next(new ErrorResponse('User already exists', 400));
   }
 
   const user = await User.create({
@@ -19,33 +25,36 @@ const registerUser = asyncHandler(async (req, res) => {
     password,
   });
 
-  if (user) {
-    res.status(201).json({
+  res.status(201).json({
+    success: true,
+    data: {
       _id: user._id,
       username: user.username,
       token: generateToken(user._id),
-    });
-  } else {
-    res.status(400).json({ message: 'Invalid user data' });
-  }
+    }
+  });
 });
 
-// @desc    Authenticate a user & get token
-// @route   POST /api/auth/login
-// @access  Public
-const loginUser = asyncHandler(async (req, res) => {
+const loginUser = asyncHandler(async (req, res, next) => {
   const { username, password } = req.body;
+
+  if (!username || !password) {
+    return next(new ErrorResponse('Please provide username and password', 400));
+  }
 
   const user = await User.findOne({ username });
 
   if (user && (await user.matchPassword(password))) {
-    res.json({
-      _id: user._id,
-      username: user.username,
-      token: generateToken(user._id),
+    res.status(200).json({
+      success: true,
+      data: {
+        _id: user._id,
+        username: user.username,
+        token: generateToken(user._id),
+      }
     });
   } else {
-    res.status(401).json({ message: 'Invalid username or password' });
+    return next(new ErrorResponse('Invalid credentials', 401));
   }
 });
 
